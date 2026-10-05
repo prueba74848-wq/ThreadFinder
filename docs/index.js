@@ -58,62 +58,94 @@ function openChannel(guildId, channelId) {
 function getRest() {
   return metro.findByProps("get", "post", "del", "patch");
 }
-async function findThreadBySearch(guildId, parentId, userId) {
-  var _a2, _b2, _c2, _d;
-  const RestAPI = getRest();
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await RestAPI.get({
-      url: `/guilds/${guildId}/messages/search`,
-      query: { channel_id: parentId, mentions: userId, include_nsfw: true }
-    });
-    if (res.status === 202) {
-      await new Promise((r) => {
-        var _a3;
-        return setTimeout(r, ((_a3 = res.body) == null ? void 0 : _a3.retry_after) ? res.body.retry_after * 1e3 : 1e3);
-      });
-      continue;
-    }
-    const hits = ((_b2 = (_a2 = res.body) == null ? void 0 : _a2.messages) != null ? _b2 : []).flat();
-    for (const m of hits) {
-      if ((_c2 = m.thread) == null ? void 0 : _c2.id) return m.thread.id;
-    }
-    const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-    for (const m of hits) {
-      const ch = (_d = ChannelStore == null ? void 0 : ChannelStore.getChannel) == null ? void 0 : _d.call(ChannelStore, m.channel_id);
-      if (ch && THREAD_TYPES.includes(ch.type)) return m.channel_id;
-    }
-    const other = hits.find((m) => m.channel_id !== parentId);
-    if (other) return other.channel_id;
+const norm = (s) => String(s != null ? s : "").toLowerCase();
+function getNeedles(guildId, user) {
+  var _a2;
+  let nick;
+  try {
+    const MemberStore = metro.findByProps("getNick", "getMember");
+    nick = (_a2 = MemberStore == null ? void 0 : MemberStore.getNick) == null ? void 0 : _a2.call(MemberStore, guildId, user.id);
+  } catch {
+  }
+  return [user.id, user.username, user.globalName, user.global_name, nick].filter(Boolean).map(norm);
+}
+async function safeGet(url, query) {
+  var _a2;
+  try {
+    const res = await getRest().get({ url, query });
+    return res;
+  } catch (e) {
+    _vendetta.logger.log(`[ViewThread] GET ${url} failed: ${String((_a2 = e == null ? void 0 : e.message) != null ? _a2 : e)}`);
     return null;
   }
-  return null;
 }
-async function findThreadByName(guildId, parentId, user) {
-  var _a2, _b2, _c2, _d;
-  const RestAPI = getRest();
-  const needles = [user.id, user.username, user.globalName, user.global_name].filter(Boolean).map((s) => s.toLowerCase());
-  const matches = (t) => {
-    var _a3;
-    const name = ((_a3 = t.name) != null ? _a3 : "").toLowerCase();
+async function isThreadOf(channelId, parentId) {
+  var _a2;
+  const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
+  const local = (_a2 = ChannelStore == null ? void 0 : ChannelStore.getChannel) == null ? void 0 : _a2.call(ChannelStore, channelId);
+  if (local) return local.parent_id === parentId && THREAD_TYPES.includes(local.type);
+  const res = await safeGet(`/channels/${channelId}`);
+  const ch = res == null ? void 0 : res.body;
+  return !!ch && ch.parent_id === parentId && THREAD_TYPES.includes(ch.type);
+}
+async function findThread(guildId, parentId, user, diag) {
+  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+  const needles = getNeedles(guildId, user);
+  const nameMatches = (t) => {
+    const name = norm(t == null ? void 0 : t.name);
     return needles.some((n) => name.includes(n));
   };
   try {
-    const active = await RestAPI.get({ url: `/guilds/${guildId}/threads/active` });
-    const t = ((_b2 = (_a2 = active.body) == null ? void 0 : _a2.threads) != null ? _b2 : []).find((t2) => t2.parent_id === parentId && matches(t2));
+    const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
+    const all = Object.values((_b2 = (_a2 = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _a2.call(ChannelStore, guildId)) != null ? _b2 : {});
+    const t = all.find((c) => (c == null ? void 0 : c.parent_id) === parentId && nameMatches(c));
+    diag.push(`local:${all.length}`);
     if (t) return t.id;
   } catch (e) {
-    _vendetta.logger.log("[ViewThread] active threads failed: " + String(e));
+    _vendetta.logger.log("[ViewThread] local lookup failed: " + String(e));
   }
-  try {
-    const arch = await RestAPI.get({
-      url: `/channels/${parentId}/threads/archived/public`,
-      query: { limit: 100 }
-    });
-    const t = ((_d = (_c2 = arch.body) == null ? void 0 : _c2.threads) != null ? _d : []).find(matches);
-    if (t) return t.id;
-  } catch (e) {
-    _vendetta.logger.log("[ViewThread] archived threads failed: " + String(e));
+  for (const withChannel of [true, false]) {
+    const query = { mentions: user.id, include_nsfw: true };
+    if (withChannel) query.channel_id = parentId;
+    let res = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await safeGet(`/guilds/${guildId}/messages/search`, query);
+      if ((res == null ? void 0 : res.status) === 202) {
+        await new Promise((r) => {
+          var _a3, _b3;
+          return setTimeout(r, ((_b3 = (_a3 = res.body) == null ? void 0 : _a3.retry_after) != null ? _b3 : 1) * 1e3);
+        });
+        continue;
+      }
+      break;
+    }
+    const hits = ((_d = (_c2 = res == null ? void 0 : res.body) == null ? void 0 : _c2.messages) != null ? _d : []).flat();
+    diag.push(`search${withChannel ? "(ch)" : ""}:${hits.length}`);
+    for (const m of hits) {
+      if ((_e = m.thread) == null ? void 0 : _e.id) return m.thread.id;
+    }
+    for (const m of hits.slice(0, 10)) {
+      if (m.channel_id !== parentId && await isThreadOf(m.channel_id, parentId)) return m.channel_id;
+      if (m.channel_id === parentId && await isThreadOf(m.id, parentId)) return m.id;
+    }
   }
+  for (const q of [user.username, (_f = user.globalName) != null ? _f : user.global_name].filter(Boolean)) {
+    const res = await safeGet(`/channels/${parentId}/threads/search`, { name: q, limit: 25 });
+    const threads = (_h = (_g = res == null ? void 0 : res.body) == null ? void 0 : _g.threads) != null ? _h : [];
+    diag.push(`tsearch:${threads.length}`);
+    const t = (_i = threads.find((t2) => t2.parent_id === parentId && nameMatches(t2))) != null ? _i : threads[0];
+    if (t && nameMatches(t)) return t.id;
+  }
+  const active = await safeGet(`/guilds/${guildId}/threads/active`);
+  const activeThreads = (_k = (_j = active == null ? void 0 : active.body) == null ? void 0 : _j.threads) != null ? _k : [];
+  diag.push(`active:${activeThreads.length}`);
+  const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
+  if (a) return a.id;
+  const arch = await safeGet(`/channels/${parentId}/threads/archived/public`, { limit: 100 });
+  const archThreads = (_m = (_l = arch == null ? void 0 : arch.body) == null ? void 0 : _l.threads) != null ? _m : [];
+  diag.push(`archived:${archThreads.length}`);
+  const b = archThreads.find(nameMatches);
+  if (b) return b.id;
   return null;
 }
 async function viewThread(guildId, user) {
@@ -122,11 +154,12 @@ async function viewThread(guildId, user) {
     toasts.showToast("View Thread: set the thread channel ID in plugin settings", assets.getAssetIDByName("Small"));
     return;
   }
+  const diag = [];
   try {
-    let threadId = await findThreadBySearch(guildId, parentId, user.id);
-    if (!threadId) threadId = await findThreadByName(guildId, parentId, user);
+    const threadId = await findThread(guildId, parentId, user, diag);
     if (!threadId) {
-      toasts.showToast(`No thread found for ${user.username}`, assets.getAssetIDByName("Small"));
+      _vendetta.logger.log(`[ViewThread] No thread for ${user.username} (${user.id}). ${diag.join(" ")}`);
+      toasts.showToast(`No thread for ${user.username} [${diag.join(" ")}]`, assets.getAssetIDByName("Small"));
       return;
     }
     openChannel(guildId, threadId);
