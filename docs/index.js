@@ -106,16 +106,27 @@ async function isThreadOf(channelId, parentId) {
   return !!info && info.parent_id === parentId && THREAD_TYPES.includes(info.type);
 }
 async function findThread(guildId, parentId, user, diag) {
-  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
-  const needles = getNeedles(guildId, user);
+  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
+  try {
+    const UserStore = metro.findByProps("getUser", "getCurrentUser");
+    const real = (_a2 = UserStore == null ? void 0 : UserStore.getUser) == null ? void 0 : _a2.call(UserStore, user.id);
+    if (real == null ? void 0 : real.username) user = { ...user, username: real.username, globalName: (_b2 = real.globalName) != null ? _b2 : user.globalName };
+  } catch {
+  }
+  diag.push(`@username=${user.username} display=${(_d = (_c2 = user.globalName) != null ? _c2 : user.global_name) != null ? _d : "?"}`);
+  const clean = (s) => norm(s).replace(/[^a-z0-9À-￿]/g, "");
+  const needles = getNeedles(guildId, user).map(clean).filter((n) => n.length >= 3);
   const nameMatches = (t) => {
-    const name = norm(t == null ? void 0 : t.name);
-    return needles.some((n) => name === n || name.includes(n));
+    const name = clean(t == null ? void 0 : t.name);
+    return !!name && needles.some((n) => name === n || name.includes(n));
   };
-  const searchNames = [user.username, (_a2 = user.globalName) != null ? _a2 : user.global_name].filter(Boolean);
+  const stripEdge = (s) => s.replace(/^[^\w]+|[^\w]+$/g, "");
+  const searchNames = [...new Set(
+    [user.username, (_e = user.globalName) != null ? _e : user.global_name].filter(Boolean).map((s) => stripEdge(String(s))).filter((s) => s.length >= 2)
+  )];
   try {
     const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-    const all = Object.values((_c2 = (_b2 = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _b2.call(ChannelStore, guildId)) != null ? _c2 : {});
+    const all = Object.values((_g = (_f = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _f.call(ChannelStore, guildId)) != null ? _g : {});
     diag.push(`local channels: ${all.length}`);
     const t = all.find((c) => (c == null ? void 0 : c.parent_id) === parentId && nameMatches(c));
     if (t) return t.id;
@@ -131,7 +142,7 @@ async function findThread(guildId, parentId, user, diag) {
         sort_order: "desc",
         archived
       });
-      const threads = (_e = (_d = res == null ? void 0 : res.body) == null ? void 0 : _d.threads) != null ? _e : [];
+      const threads = (_i = (_h = res == null ? void 0 : res.body) == null ? void 0 : _h.threads) != null ? _i : [];
       diag.push(`thread search "${q}" archived=${archived}: status ${st(res)}, ${threads.length} results`);
       const t = threads.find(nameMatches);
       if (t) return t.id;
@@ -143,17 +154,20 @@ async function findThread(guildId, parentId, user, diag) {
       const query = { limit: 100 };
       if (beforeTs) query.before = beforeTs;
       const res = await safeGet(`/channels/${parentId}/threads/archived/${kind}`, query);
-      const threads = (_g = (_f = res == null ? void 0 : res.body) == null ? void 0 : _f.threads) != null ? _g : [];
-      if (page === 0) diag.push(`archived ${kind}: status ${st(res)}, ${threads.length} on page 1`);
+      const threads = (_k = (_j = res == null ? void 0 : res.body) == null ? void 0 : _j.threads) != null ? _k : [];
+      if (page === 0) {
+        diag.push(`archived ${kind}: status ${st(res)}, ${threads.length} on page 1`);
+        if (threads.length) diag.push(`  sample names: ${threads.slice(0, 5).map((t2) => t2.name).join(" | ")}`);
+      }
       const t = threads.find(nameMatches);
       if (t) return t.id;
-      if (!((_h = res == null ? void 0 : res.body) == null ? void 0 : _h.has_more) || !threads.length) break;
-      beforeTs = (_j = (_i = threads[threads.length - 1]) == null ? void 0 : _i.thread_metadata) == null ? void 0 : _j.archive_timestamp;
+      if (!((_l = res == null ? void 0 : res.body) == null ? void 0 : _l.has_more) || !threads.length) break;
+      beforeTs = (_n = (_m = threads[threads.length - 1]) == null ? void 0 : _m.thread_metadata) == null ? void 0 : _n.archive_timestamp;
       if (!beforeTs) break;
     }
   }
   const active = await safeGet(`/guilds/${guildId}/threads/active`);
-  const activeThreads = (_l = (_k = active == null ? void 0 : active.body) == null ? void 0 : _k.threads) != null ? _l : [];
+  const activeThreads = (_p = (_o = active == null ? void 0 : active.body) == null ? void 0 : _o.threads) != null ? _p : [];
   diag.push(`active threads: status ${st(active)}, ${activeThreads.length} results`);
   const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
   if (a) return a.id;
@@ -172,14 +186,14 @@ async function findThread(guildId, parentId, user, diag) {
       }
       break;
     }
-    const hits = ((_n = (_m = res == null ? void 0 : res.body) == null ? void 0 : _m.messages) != null ? _n : []).flat();
+    const hits = ((_r = (_q = res == null ? void 0 : res.body) == null ? void 0 : _q.messages) != null ? _r : []).flat();
     diag.push(`message search${withChannel ? " in channel" : ""}: status ${st(res)}, ${hits.length} hits`);
     for (const m of hits) {
-      if ((_o = m.thread) == null ? void 0 : _o.id) return m.thread.id;
+      if ((_s = m.thread) == null ? void 0 : _s.id) return m.thread.id;
     }
     for (const m of hits.slice(0, 10)) {
       const info = await getChannelInfo(m.channel_id);
-      diag.push(`  hit channel ${m.channel_id} parent=${(_p = info == null ? void 0 : info.parent_id) != null ? _p : "?"} type=${(_q = info == null ? void 0 : info.type) != null ? _q : "?"} name=${(_r = info == null ? void 0 : info.name) != null ? _r : "?"}`);
+      diag.push(`  hit channel ${m.channel_id} parent=${(_t = info == null ? void 0 : info.parent_id) != null ? _t : "?"} type=${(_u = info == null ? void 0 : info.type) != null ? _u : "?"} name=${(_v = info == null ? void 0 : info.name) != null ? _v : "?"}`);
       if (m.channel_id !== parentId && (info == null ? void 0 : info.parent_id) === parentId && THREAD_TYPES.includes(info.type)) {
         return m.channel_id;
       }
