@@ -1,7 +1,15 @@
 {
-  "name": "View Thread",
-  "description": "Adds a View thread option to messages that jumps to the user's thread",
-  "authors": [{ "name": "you" }],
-  "main": "index.js",
-  "vendetta": { "icon": "ic_search" }
+    "name": "ViewThread",
+    "description": "Adds a View thread option to messages that jumps to the user's thread",
+    "authors": [
+        {
+            "name": "you",
+            "id": "0"
+        }
+    ],
+    "main": "index.js",
+    "vendetta": {
+        "icon": "ic_search"
+    },
+    "hash": "27e5df78d7b3b38968ffe950ea3276d90d027b08ccd538e8e405a30568cec887"
 }
