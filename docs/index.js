@@ -53,7 +53,27 @@ const { ActionSheetRow } = metro.findByProps("ActionSheetRow");
 const ThreadIcon = (_c = (_b = (_a = assets.getAssetIDByName("ic_thread")) != null ? _a : assets.getAssetIDByName("ThreadIcon")) != null ? _b : assets.getAssetIDByName("ic_search")) != null ? _c : assets.getAssetIDByName("search");
 const THREAD_TYPES = [10, 11, 12];
 function openChannel(guildId, channelId) {
-  common.ReactNative.Linking.openURL(`https://discord.com/channels/${guildId}/${channelId}`);
+  var _a2;
+  const path = `/channels/${guildId}/${channelId}`;
+  try {
+    const Router = (_a2 = metro.findByProps("transitionTo", "transitionToGuild")) != null ? _a2 : metro.findByProps("transitionTo");
+    if (typeof (Router == null ? void 0 : Router.transitionTo) === "function") {
+      Router.transitionTo(path);
+      return true;
+    }
+  } catch (e) {
+    _vendetta.logger.log("[ViewThread] transitionTo failed: " + String(e));
+  }
+  try {
+    const Router = metro.findByProps("transitionToGuild");
+    if (typeof (Router == null ? void 0 : Router.transitionToGuild) === "function") {
+      Router.transitionToGuild(guildId, channelId);
+      return true;
+    }
+  } catch (e) {
+    _vendetta.logger.log("[ViewThread] transitionToGuild failed: " + String(e));
+  }
+  return false;
 }
 function getRest() {
   return metro.findByProps("get", "post", "del", "patch");
@@ -220,7 +240,11 @@ guild ${guildId}, thread channel ${parentId}
       toasts.showToast(`No thread for ${user.username} (debug info copied to clipboard)`, assets.getAssetIDByName("Small"));
       return;
     }
-    openChannel(guildId, threadId);
+    if (!openChannel(guildId, threadId)) {
+      const link = `https://discord.com/channels/${guildId}/${threadId}`;
+      copyToClipboard(link);
+      toasts.showToast("Couldn't open it in-app, thread link copied to clipboard", assets.getAssetIDByName("Small"));
+    }
   } catch (err) {
     const report = `[ViewThread] Error: ${String(err)}
 ${diag.join("\n")}`;
