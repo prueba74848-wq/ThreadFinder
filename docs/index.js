@@ -58,6 +58,15 @@ function openChannel(guildId, channelId) {
 function getRest() {
   return metro.findByProps("get", "post", "del", "patch");
 }
+function copyToClipboard(text) {
+  var _a2, _b2;
+  try {
+    const cb = (_a2 = common.clipboard) != null ? _a2 : metro.findByProps("setString", "getString");
+    (_b2 = cb == null ? void 0 : cb.setString) == null ? void 0 : _b2.call(cb, text);
+  } catch (e) {
+    _vendetta.logger.log("[ViewThread] clipboard failed: " + String(e));
+  }
+}
 const norm = (s) => String(s != null ? s : "").toLowerCase();
 function getNeedles(guildId, user) {
   var _a2;
@@ -67,18 +76,22 @@ function getNeedles(guildId, user) {
     nick = (_a2 = MemberStore == null ? void 0 : MemberStore.getNick) == null ? void 0 : _a2.call(MemberStore, guildId, user.id);
   } catch {
   }
-  return [user.id, user.username, user.globalName, user.global_name, nick].filter(Boolean).map(norm);
+  return [user.username, user.globalName, user.global_name, nick, user.id].filter(Boolean).map(norm);
 }
 async function safeGet(url, query) {
-  var _a2;
+  var _a2, _b2, _c2, _d, _e, _f, _g;
   try {
-    const res = await getRest().get({ url, query });
-    return res;
+    return await getRest().get({ url, query });
   } catch (e) {
-    _vendetta.logger.log(`[ViewThread] GET ${url} failed: ${String((_a2 = e == null ? void 0 : e.message) != null ? _a2 : e)}`);
-    return null;
+    const status = (_c2 = (_b2 = e == null ? void 0 : e.status) != null ? _b2 : (_a2 = e == null ? void 0 : e.response) == null ? void 0 : _a2.status) != null ? _c2 : "ERR";
+    _vendetta.logger.log(`[ViewThread] GET ${url} failed (${status}): ${String((_f = (_e = (_d = e == null ? void 0 : e.body) == null ? void 0 : _d.message) != null ? _e : e == null ? void 0 : e.message) != null ? _f : "")}`);
+    return { status, body: (_g = e == null ? void 0 : e.body) != null ? _g : null, error: true };
   }
 }
+const st = (res) => {
+  var _a2;
+  return String((_a2 = res == null ? void 0 : res.status) != null ? _a2 : "?");
+};
 async function getChannelInfo(channelId) {
   var _a2;
   const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
@@ -93,21 +106,57 @@ async function isThreadOf(channelId, parentId) {
   return !!info && info.parent_id === parentId && THREAD_TYPES.includes(info.type);
 }
 async function findThread(guildId, parentId, user, diag) {
-  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
   const needles = getNeedles(guildId, user);
   const nameMatches = (t) => {
     const name = norm(t == null ? void 0 : t.name);
-    return needles.some((n) => name.includes(n));
+    return needles.some((n) => name === n || name.includes(n));
   };
+  const searchNames = [user.username, (_a2 = user.globalName) != null ? _a2 : user.global_name].filter(Boolean);
   try {
     const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-    const all = Object.values((_b2 = (_a2 = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _a2.call(ChannelStore, guildId)) != null ? _b2 : {});
+    const all = Object.values((_c2 = (_b2 = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _b2.call(ChannelStore, guildId)) != null ? _c2 : {});
+    diag.push(`local channels: ${all.length}`);
     const t = all.find((c) => (c == null ? void 0 : c.parent_id) === parentId && nameMatches(c));
-    diag.push(`local:${all.length}`);
     if (t) return t.id;
   } catch (e) {
     _vendetta.logger.log("[ViewThread] local lookup failed: " + String(e));
   }
+  for (const archived of [false, true]) {
+    for (const q of searchNames) {
+      const res = await safeGet(`/channels/${parentId}/threads/search`, {
+        name: q,
+        limit: 25,
+        sort_by: "last_message_time",
+        sort_order: "desc",
+        archived
+      });
+      const threads = (_e = (_d = res == null ? void 0 : res.body) == null ? void 0 : _d.threads) != null ? _e : [];
+      diag.push(`thread search "${q}" archived=${archived}: status ${st(res)}, ${threads.length} results`);
+      const t = threads.find(nameMatches);
+      if (t) return t.id;
+    }
+  }
+  for (const kind of ["public", "private"]) {
+    let beforeTs;
+    for (let page = 0; page < 10; page++) {
+      const query = { limit: 100 };
+      if (beforeTs) query.before = beforeTs;
+      const res = await safeGet(`/channels/${parentId}/threads/archived/${kind}`, query);
+      const threads = (_g = (_f = res == null ? void 0 : res.body) == null ? void 0 : _f.threads) != null ? _g : [];
+      if (page === 0) diag.push(`archived ${kind}: status ${st(res)}, ${threads.length} on page 1`);
+      const t = threads.find(nameMatches);
+      if (t) return t.id;
+      if (!((_h = res == null ? void 0 : res.body) == null ? void 0 : _h.has_more) || !threads.length) break;
+      beforeTs = (_j = (_i = threads[threads.length - 1]) == null ? void 0 : _i.thread_metadata) == null ? void 0 : _j.archive_timestamp;
+      if (!beforeTs) break;
+    }
+  }
+  const active = await safeGet(`/guilds/${guildId}/threads/active`);
+  const activeThreads = (_l = (_k = active == null ? void 0 : active.body) == null ? void 0 : _k.threads) != null ? _l : [];
+  diag.push(`active threads: status ${st(active)}, ${activeThreads.length} results`);
+  const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
+  if (a) return a.id;
   for (const withChannel of [true, false]) {
     const query = { mentions: user.id, include_nsfw: true };
     if (withChannel) query.channel_id = parentId;
@@ -123,45 +172,20 @@ async function findThread(guildId, parentId, user, diag) {
       }
       break;
     }
-    const hits = ((_d = (_c2 = res == null ? void 0 : res.body) == null ? void 0 : _c2.messages) != null ? _d : []).flat();
-    diag.push(`search${withChannel ? "(ch)" : ""}:${hits.length}`);
+    const hits = ((_n = (_m = res == null ? void 0 : res.body) == null ? void 0 : _m.messages) != null ? _n : []).flat();
+    diag.push(`message search${withChannel ? " in channel" : ""}: status ${st(res)}, ${hits.length} hits`);
     for (const m of hits) {
-      if ((_e = m.thread) == null ? void 0 : _e.id) return m.thread.id;
-    }
-    if (!withChannel) {
-      const parts = [];
-      for (const m of hits.slice(0, 3)) {
-        const info = await getChannelInfo(m.channel_id);
-        parts.push(`${m.channel_id}>${(_f = info == null ? void 0 : info.parent_id) != null ? _f : "?"}/t${(_g = info == null ? void 0 : info.type) != null ? _g : "?"}`);
-      }
-      diag.push(`hits:{${parts.join(",")}}`);
-      _vendetta.logger.log("[ViewThread] hits: " + JSON.stringify(hits.slice(0, 3).map((m) => {
-        var _a3;
-        return { id: m.id, ch: m.channel_id, thread: (_a3 = m.thread) == null ? void 0 : _a3.id };
-      })));
+      if ((_o = m.thread) == null ? void 0 : _o.id) return m.thread.id;
     }
     for (const m of hits.slice(0, 10)) {
-      if (m.channel_id !== parentId && await isThreadOf(m.channel_id, parentId)) return m.channel_id;
+      const info = await getChannelInfo(m.channel_id);
+      diag.push(`  hit channel ${m.channel_id} parent=${(_p = info == null ? void 0 : info.parent_id) != null ? _p : "?"} type=${(_q = info == null ? void 0 : info.type) != null ? _q : "?"} name=${(_r = info == null ? void 0 : info.name) != null ? _r : "?"}`);
+      if (m.channel_id !== parentId && (info == null ? void 0 : info.parent_id) === parentId && THREAD_TYPES.includes(info.type)) {
+        return m.channel_id;
+      }
       if (m.channel_id === parentId && await isThreadOf(m.id, parentId)) return m.id;
     }
   }
-  for (const q of [user.username, (_h = user.globalName) != null ? _h : user.global_name].filter(Boolean)) {
-    const res = await safeGet(`/channels/${parentId}/threads/search`, { name: q, limit: 25 });
-    const threads = (_j = (_i = res == null ? void 0 : res.body) == null ? void 0 : _i.threads) != null ? _j : [];
-    diag.push(`tsearch:${threads.length}`);
-    const t = (_k = threads.find((t2) => t2.parent_id === parentId && nameMatches(t2))) != null ? _k : threads[0];
-    if (t && nameMatches(t)) return t.id;
-  }
-  const active = await safeGet(`/guilds/${guildId}/threads/active`);
-  const activeThreads = (_m = (_l = active == null ? void 0 : active.body) == null ? void 0 : _l.threads) != null ? _m : [];
-  diag.push(`active:${activeThreads.length}`);
-  const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
-  if (a) return a.id;
-  const arch = await safeGet(`/channels/${parentId}/threads/archived/public`, { limit: 100 });
-  const archThreads = (_o = (_n = arch == null ? void 0 : arch.body) == null ? void 0 : _n.threads) != null ? _o : [];
-  diag.push(`archived:${archThreads.length}`);
-  const b = archThreads.find(nameMatches);
-  if (b) return b.id;
   return null;
 }
 async function viewThread(guildId, user) {
@@ -174,14 +198,21 @@ async function viewThread(guildId, user) {
   try {
     const threadId = await findThread(guildId, parentId, user, diag);
     if (!threadId) {
-      _vendetta.logger.log(`[ViewThread] No thread for ${user.username} (${user.id}). ${diag.join(" ")}`);
-      toasts.showToast(`No thread for ${user.username} [${diag.join(" ")}]`, assets.getAssetIDByName("Small"));
+      const report = `[ViewThread] No thread for ${user.username} (${user.id})
+guild ${guildId}, thread channel ${parentId}
+` + diag.join("\n");
+      _vendetta.logger.log(report);
+      copyToClipboard(report);
+      toasts.showToast(`No thread for ${user.username} (debug info copied to clipboard)`, assets.getAssetIDByName("Small"));
       return;
     }
     openChannel(guildId, threadId);
   } catch (err) {
-    _vendetta.logger.log("[ViewThread] Error: " + String(err));
-    toasts.showToast("View Thread failed, check logs", assets.getAssetIDByName("Small"));
+    const report = `[ViewThread] Error: ${String(err)}
+${diag.join("\n")}`;
+    _vendetta.logger.log(report);
+    copyToClipboard(report);
+    toasts.showToast("View Thread failed (details copied to clipboard)", assets.getAssetIDByName("Small"));
   }
 }
 let unpatchOpenLazy = null;
