@@ -79,17 +79,21 @@ async function safeGet(url, query) {
     return null;
   }
 }
-async function isThreadOf(channelId, parentId) {
+async function getChannelInfo(channelId) {
   var _a2;
   const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
   const local = (_a2 = ChannelStore == null ? void 0 : ChannelStore.getChannel) == null ? void 0 : _a2.call(ChannelStore, channelId);
-  if (local) return local.parent_id === parentId && THREAD_TYPES.includes(local.type);
+  if (local) return { parent_id: local.parent_id, type: local.type, name: local.name };
   const res = await safeGet(`/channels/${channelId}`);
   const ch = res == null ? void 0 : res.body;
-  return !!ch && ch.parent_id === parentId && THREAD_TYPES.includes(ch.type);
+  return (ch == null ? void 0 : ch.id) ? { parent_id: ch.parent_id, type: ch.type, name: ch.name } : null;
+}
+async function isThreadOf(channelId, parentId) {
+  const info = await getChannelInfo(channelId);
+  return !!info && info.parent_id === parentId && THREAD_TYPES.includes(info.type);
 }
 async function findThread(guildId, parentId, user, diag) {
-  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
   const needles = getNeedles(guildId, user);
   const nameMatches = (t) => {
     const name = norm(t == null ? void 0 : t.name);
@@ -124,25 +128,37 @@ async function findThread(guildId, parentId, user, diag) {
     for (const m of hits) {
       if ((_e = m.thread) == null ? void 0 : _e.id) return m.thread.id;
     }
+    if (!withChannel) {
+      const parts = [];
+      for (const m of hits.slice(0, 3)) {
+        const info = await getChannelInfo(m.channel_id);
+        parts.push(`${m.channel_id}>${(_f = info == null ? void 0 : info.parent_id) != null ? _f : "?"}/t${(_g = info == null ? void 0 : info.type) != null ? _g : "?"}`);
+      }
+      diag.push(`hits:{${parts.join(",")}}`);
+      _vendetta.logger.log("[ViewThread] hits: " + JSON.stringify(hits.slice(0, 3).map((m) => {
+        var _a3;
+        return { id: m.id, ch: m.channel_id, thread: (_a3 = m.thread) == null ? void 0 : _a3.id };
+      })));
+    }
     for (const m of hits.slice(0, 10)) {
       if (m.channel_id !== parentId && await isThreadOf(m.channel_id, parentId)) return m.channel_id;
       if (m.channel_id === parentId && await isThreadOf(m.id, parentId)) return m.id;
     }
   }
-  for (const q of [user.username, (_f = user.globalName) != null ? _f : user.global_name].filter(Boolean)) {
+  for (const q of [user.username, (_h = user.globalName) != null ? _h : user.global_name].filter(Boolean)) {
     const res = await safeGet(`/channels/${parentId}/threads/search`, { name: q, limit: 25 });
-    const threads = (_h = (_g = res == null ? void 0 : res.body) == null ? void 0 : _g.threads) != null ? _h : [];
+    const threads = (_j = (_i = res == null ? void 0 : res.body) == null ? void 0 : _i.threads) != null ? _j : [];
     diag.push(`tsearch:${threads.length}`);
-    const t = (_i = threads.find((t2) => t2.parent_id === parentId && nameMatches(t2))) != null ? _i : threads[0];
+    const t = (_k = threads.find((t2) => t2.parent_id === parentId && nameMatches(t2))) != null ? _k : threads[0];
     if (t && nameMatches(t)) return t.id;
   }
   const active = await safeGet(`/guilds/${guildId}/threads/active`);
-  const activeThreads = (_k = (_j = active == null ? void 0 : active.body) == null ? void 0 : _j.threads) != null ? _k : [];
+  const activeThreads = (_m = (_l = active == null ? void 0 : active.body) == null ? void 0 : _l.threads) != null ? _m : [];
   diag.push(`active:${activeThreads.length}`);
   const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
   if (a) return a.id;
   const arch = await safeGet(`/channels/${parentId}/threads/archived/public`, { limit: 100 });
-  const archThreads = (_m = (_l = arch == null ? void 0 : arch.body) == null ? void 0 : _l.threads) != null ? _m : [];
+  const archThreads = (_o = (_n = arch == null ? void 0 : arch.body) == null ? void 0 : _n.threads) != null ? _o : [];
   diag.push(`archived:${archThreads.length}`);
   const b = archThreads.find(nameMatches);
   if (b) return b.id;
