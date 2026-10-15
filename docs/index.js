@@ -138,7 +138,7 @@ async function findThread(guildId, parentId, user, diag) {
   const needles = getNeedles(guildId, user).map(clean).filter((n) => n.length >= 3);
   const nameMatches = (t) => {
     const name = clean(t == null ? void 0 : t.name);
-    return !!name && needles.some((n) => name === n || name.includes(n));
+    return !!name && needles.some((n) => name === n || (n.length >= 5 && name.includes(n)));
   };
   const stripEdge = (s) => s.replace(/^[^\w]+|[^\w]+$/g, "");
   const searchNames = [...new Set(
@@ -209,15 +209,18 @@ async function findThread(guildId, parentId, user, diag) {
     const hits = ((_r = (_q = res == null ? void 0 : res.body) == null ? void 0 : _q.messages) != null ? _r : []).flat();
     diag.push(`message search${withChannel ? " in channel" : ""}: status ${st(res)}, ${hits.length} hits`);
     for (const m of hits) {
-      if ((_s = m.thread) == null ? void 0 : _s.id) return m.thread.id;
+      if (((_s = m.thread) == null ? void 0 : _s.id) && nameMatches(m.thread)) return m.thread.id;
     }
     for (const m of hits.slice(0, 10)) {
       const info = await getChannelInfo(m.channel_id);
       diag.push(`  hit channel ${m.channel_id} parent=${(_t = info == null ? void 0 : info.parent_id) != null ? _t : "?"} type=${(_u = info == null ? void 0 : info.type) != null ? _u : "?"} name=${(_v = info == null ? void 0 : info.name) != null ? _v : "?"}`);
-      if (m.channel_id !== parentId && (info == null ? void 0 : info.parent_id) === parentId && THREAD_TYPES.includes(info.type)) {
+      if (m.channel_id !== parentId && (info == null ? void 0 : info.parent_id) === parentId && THREAD_TYPES.includes(info.type) && nameMatches(info)) {
         return m.channel_id;
       }
-      if (m.channel_id === parentId && await isThreadOf(m.id, parentId)) return m.id;
+      if (m.channel_id === parentId) {
+        const startInfo = await getChannelInfo(m.id);
+        if (startInfo && startInfo.parent_id === parentId && THREAD_TYPES.includes(startInfo.type) && nameMatches(startInfo)) return m.id;
+      }
     }
   }
   return null;
@@ -240,6 +243,9 @@ guild ${guildId}, thread channel ${parentId}
       toasts.showToast(`No thread for ${user.username} (debug info copied to clipboard)`, assets.getAssetIDByName("Small"));
       return;
     }
+    const foundInfo = await getChannelInfo(threadId);
+    _vendetta.logger.log(`[ViewThread] ${user.username} (${user.id}) -> ${threadId} (${foundInfo ? foundInfo.name : "?"})`);
+    toasts.showToast(`Thread: ${foundInfo && foundInfo.name ? foundInfo.name : threadId}`, assets.getAssetIDByName("Small"));
     if (!openChannel(guildId, threadId)) {
       const link = `https://discord.com/channels/${guildId}/${threadId}`;
       copyToClipboard(link);
