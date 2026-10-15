@@ -22,11 +22,6 @@ var exports = module.exports;
 
 Object.defineProperties(exports, { __esModule: { value: true }, [Symbol.toStringTag]: { value: 'Module' } });
 
-function __report(where, e) {
-  try { vendetta.logger.log("[ViewThread] " + where + ": " + String(e && e.stack ? e.stack : e)); } catch (_) {}
-  try { alert("[ViewThread] " + where + "\n" + String(e && e.stack ? e.stack : e)); } catch (_) {}
-}
-try {
 const metro = require('@vendetta/metro');
 const patcher = require('@vendetta/patcher');
 const plugin = require('@vendetta/plugin');
@@ -38,51 +33,25 @@ const toasts = require('@vendetta/ui/toasts');
 const components = require('@vendetta/ui/components');
 const storage = require('@vendetta/storage');
 
-const { FormSection, FormInput, FormText, FormRow, FormSwitchRow } = components.Forms;
-
-// ---- options ----
-const MAX_LIST = 12;      // threads shown in list mode (newest first)
-const PREVIEW_COUNT = 3;  // recent messages shown per thread in list mode
-
+const { FormSection, FormInput, FormText } = components.Forms;
 function Settings() {
   storage.useProxy(plugin.storage);
-  const h = common.React.createElement;
-  let modeRow = null;
-  if (FormSwitchRow) {
-    modeRow = h(FormSwitchRow, {
-      label: "Show thread list",
-      subLabel: "Off: open the most recent thread automatically. On: list every thread found for that user, with recent messages and dates, and pick one.",
-      value: !!plugin.storage.listMode,
-      onValueChange: (v) => plugin.storage.listMode = !!v
-    });
-  } else if (FormRow) {
-    modeRow = h(FormRow, {
-      label: "Mode: " + (plugin.storage.listMode ? "show thread list" : "open most recent thread"),
-      subLabel: "Tap to switch",
-      onPress: () => plugin.storage.listMode = !plugin.storage.listMode
-    });
-  }
-  return h(
-    FormSection,
-    { title: "View Thread", android_noDivider: true },
-    h(FormInput, {
+  return /* @__PURE__ */ common.React.createElement(FormSection, { title: "View Thread", android_noDivider: true }, /* @__PURE__ */ common.React.createElement(
+    FormInput,
+    {
       title: "Thread channel ID",
       placeholder: "ID of the channel where the bot creates threads",
       value: plugin.storage.threadChannelId,
       onChange: (v) => plugin.storage.threadChannelId = v.trim()
-    }),
-    modeRow,
-    h(FormText, { style: { paddingHorizontal: 16, paddingBottom: 8 } }, 'Long-press a message and tap "View thread". Enable Developer Mode, then long-press the channel and use Copy Channel ID.')
-  );
+    }
+  ), /* @__PURE__ */ common.React.createElement(FormText, { style: { paddingHorizontal: 16, paddingBottom: 8 } }, 'Long-press a message and tap "View thread". Enable Developer Mode, then long-press the channel and use Copy Channel ID.'));
 }
 
 var _a, _b, _c;
-const ActionSheetModule = metro.findByProps("ActionSheetRow");
 const ActionSheet = metro.findByProps("openLazy", "hideActionSheet");
-const { ActionSheetRow } = ActionSheetModule;
+const { ActionSheetRow } = metro.findByProps("ActionSheetRow");
 const ThreadIcon = (_c = (_b = (_a = assets.getAssetIDByName("ic_thread")) != null ? _a : assets.getAssetIDByName("ThreadIcon")) != null ? _b : assets.getAssetIDByName("ic_search")) != null ? _c : assets.getAssetIDByName("search");
 const THREAD_TYPES = [10, 11, 12];
-
 function openChannel(guildId, channelId) {
   var _a2;
   const path = `/channels/${guildId}/${channelId}`;
@@ -143,83 +112,47 @@ const st = (res) => {
   var _a2;
   return String((_a2 = res == null ? void 0 : res.status) != null ? _a2 : "?");
 };
-
-// snowflake -> unix ms (Number math is precise enough for display/sorting)
-const toTs = (id) => Number(id) / 4194304 + 14200704e5;
-const pad2 = (n) => String(n).padStart(2, "0");
-function fmtDate(ms) {
-  const d = new Date(ms);
-  if (isNaN(d.getTime())) return "?";
-  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
 async function getChannelInfo(channelId) {
+  var _a2;
   const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-  const local = ChannelStore && ChannelStore.getChannel ? ChannelStore.getChannel(channelId) : null;
-  if (local) {
-    return {
-      id: channelId,
-      parent_id: local.parent_id,
-      type: local.type,
-      name: local.name,
-      last_message_id: local.lastMessageId,
-      archived: !!(local.threadMetadata && local.threadMetadata.archived)
-    };
-  }
+  const local = (_a2 = ChannelStore == null ? void 0 : ChannelStore.getChannel) == null ? void 0 : _a2.call(ChannelStore, channelId);
+  if (local) return { parent_id: local.parent_id, type: local.type, name: local.name };
   const res = await safeGet(`/channels/${channelId}`);
-  const ch = res && res.body;
-  return ch && ch.id ? {
-    id: ch.id,
-    parent_id: ch.parent_id,
-    type: ch.type,
-    name: ch.name,
-    last_message_id: ch.last_message_id,
-    archived: !!(ch.thread_metadata && ch.thread_metadata.archived)
-  } : null;
+  const ch = res == null ? void 0 : res.body;
+  return (ch == null ? void 0 : ch.id) ? { parent_id: ch.parent_id, type: ch.type, name: ch.name } : null;
 }
-
-// Collects EVERY thread in the thread channel that belongs to the user, newest activity first.
-async function findThreads(guildId, parentId, user, diag) {
+async function isThreadOf(channelId, parentId) {
+  const info = await getChannelInfo(channelId);
+  return !!info && info.parent_id === parentId && THREAD_TYPES.includes(info.type);
+}
+async function findThread(guildId, parentId, user, diag) {
+  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
   try {
     const UserStore = metro.findByProps("getUser", "getCurrentUser");
-    const real = UserStore && UserStore.getUser ? UserStore.getUser(user.id) : null;
-    if (real && real.username) user = { ...user, username: real.username, globalName: real.globalName != null ? real.globalName : user.globalName };
+    const real = (_a2 = UserStore == null ? void 0 : UserStore.getUser) == null ? void 0 : _a2.call(UserStore, user.id);
+    if (real == null ? void 0 : real.username) user = { ...user, username: real.username, globalName: (_b2 = real.globalName) != null ? _b2 : user.globalName };
   } catch {
   }
-  diag.push(`@username=${user.username} display=${user.globalName != null ? user.globalName : user.global_name != null ? user.global_name : "?"}`);
+  diag.push(`@username=${user.username} display=${(_d = (_c2 = user.globalName) != null ? _c2 : user.global_name) != null ? _d : "?"}`);
   const clean = (s) => norm(s).replace(/[^a-z0-9À-￿]/g, "");
   const needles = getNeedles(guildId, user).map(clean).filter((n) => n.length >= 3);
   const nameMatches = (t) => {
-    const name = clean(t && t.name);
+    const name = clean(t == null ? void 0 : t.name);
     return !!name && needles.some((n) => name === n || (n.length >= 5 && name.includes(n)));
   };
   const stripEdge = (s) => s.replace(/^[^\w]+|[^\w]+$/g, "");
   const searchNames = [...new Set(
-    [user.username, user.globalName != null ? user.globalName : user.global_name].filter(Boolean).map((s) => stripEdge(String(s))).filter((s) => s.length >= 2)
+    [user.username, (_e = user.globalName) != null ? _e : user.global_name].filter(Boolean).map((s) => stripEdge(String(s))).filter((s) => s.length >= 2)
   )];
-
-  const found = new Map();
-  const add = (t, archived) => {
-    if (!t || !t.id || found.has(t.id)) return;
-    const lastId = t.last_message_id || t.lastMessageId || t.id;
-    const meta = t.thread_metadata || t.threadMetadata;
-    const isArchived = archived != null ? archived : t.archived != null ? t.archived : !!(meta && meta.archived);
-    found.set(t.id, { id: t.id, name: t.name, archived: isArchived, ts: toTs(lastId) });
-  };
-
-  // 1. threads the client already knows about
   try {
     const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-    const all = Object.values(ChannelStore && ChannelStore.getMutableGuildChannelsForGuild ? ChannelStore.getMutableGuildChannelsForGuild(guildId) || {} : {});
+    const all = Object.values((_g = (_f = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _f.call(ChannelStore, guildId)) != null ? _g : {});
     diag.push(`local channels: ${all.length}`);
-    for (const c of all) {
-      if (c && c.parent_id === parentId && nameMatches(c)) add(c);
-    }
+    const t = all.find((c) => (c == null ? void 0 : c.parent_id) === parentId && nameMatches(c));
+    if (t) return t.id;
   } catch (e) {
     _vendetta.logger.log("[ViewThread] local lookup failed: " + String(e));
   }
-
-  // 2. thread search by name (active and archived)
   for (const archived of [false, true]) {
     for (const q of searchNames) {
       const res = await safeGet(`/channels/${parentId}/threads/search`, {
@@ -229,166 +162,69 @@ async function findThreads(guildId, parentId, user, diag) {
         sort_order: "desc",
         archived
       });
-      const threads = res && res.body && res.body.threads ? res.body.threads : [];
+      const threads = (_i = (_h = res == null ? void 0 : res.body) == null ? void 0 : _h.threads) != null ? _i : [];
       diag.push(`thread search "${q}" archived=${archived}: status ${st(res)}, ${threads.length} results`);
-      for (const t of threads) {
-        if (nameMatches(t)) add(t);
-      }
+      const t = threads.find(nameMatches);
+      if (t) return t.id;
     }
   }
-
-  // 3. active threads of the whole server
+  for (const kind of ["public", "private"]) {
+    let beforeTs;
+    for (let page = 0; page < 10; page++) {
+      const query = { limit: 100 };
+      if (beforeTs) query.before = beforeTs;
+      const res = await safeGet(`/channels/${parentId}/threads/archived/${kind}`, query);
+      const threads = (_k = (_j = res == null ? void 0 : res.body) == null ? void 0 : _j.threads) != null ? _k : [];
+      if (page === 0) {
+        diag.push(`archived ${kind}: status ${st(res)}, ${threads.length} on page 1`);
+        if (threads.length) diag.push(`  sample names: ${threads.slice(0, 5).map((t2) => t2.name).join(" | ")}`);
+      }
+      const t = threads.find(nameMatches);
+      if (t) return t.id;
+      if (!((_l = res == null ? void 0 : res.body) == null ? void 0 : _l.has_more) || !threads.length) break;
+      beforeTs = (_n = (_m = threads[threads.length - 1]) == null ? void 0 : _m.thread_metadata) == null ? void 0 : _n.archive_timestamp;
+      if (!beforeTs) break;
+    }
+  }
   const active = await safeGet(`/guilds/${guildId}/threads/active`);
-  const activeThreads = active && active.body && active.body.threads ? active.body.threads : [];
+  const activeThreads = (_p = (_o = active == null ? void 0 : active.body) == null ? void 0 : _o.threads) != null ? _p : [];
   diag.push(`active threads: status ${st(active)}, ${activeThreads.length} results`);
-  for (const t of activeThreads) {
-    if (t.parent_id === parentId && nameMatches(t)) add(t, false);
-  }
-
-  // 4. crawl the archive, only when nothing was found yet
-  if (!found.size) {
-    for (const kind of ["public", "private"]) {
-      let beforeTs;
-      for (let page = 0; page < 10; page++) {
-        const query = { limit: 100 };
-        if (beforeTs) query.before = beforeTs;
-        const res = await safeGet(`/channels/${parentId}/threads/archived/${kind}`, query);
-        const threads = res && res.body && res.body.threads ? res.body.threads : [];
-        if (page === 0) {
-          diag.push(`archived ${kind}: status ${st(res)}, ${threads.length} on page 1`);
-          if (threads.length) diag.push(`  sample names: ${threads.slice(0, 5).map((t2) => t2.name).join(" | ")}`);
-        }
-        for (const t of threads) {
-          if (nameMatches(t)) add(t, true);
-        }
-        if (!(res && res.body && res.body.has_more) || !threads.length) break;
-        const last = threads[threads.length - 1];
-        beforeTs = last && last.thread_metadata ? last.thread_metadata.archive_timestamp : void 0;
-        if (!beforeTs) break;
+  const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
+  if (a) return a.id;
+  for (const withChannel of [true, false]) {
+    const query = { mentions: user.id, include_nsfw: true };
+    if (withChannel) query.channel_id = parentId;
+    let res = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await safeGet(`/guilds/${guildId}/messages/search`, query);
+      if ((res == null ? void 0 : res.status) === 202) {
+        await new Promise((r) => {
+          var _a3, _b3;
+          return setTimeout(r, ((_b3 = (_a3 = res.body) == null ? void 0 : _a3.retry_after) != null ? _b3 : 1) * 1e3);
+        });
+        continue;
+      }
+      break;
+    }
+    const hits = ((_r = (_q = res == null ? void 0 : res.body) == null ? void 0 : _q.messages) != null ? _r : []).flat();
+    diag.push(`message search${withChannel ? " in channel" : ""}: status ${st(res)}, ${hits.length} hits`);
+    for (const m of hits) {
+      if (((_s = m.thread) == null ? void 0 : _s.id) && nameMatches(m.thread)) return m.thread.id;
+    }
+    for (const m of hits.slice(0, 10)) {
+      const info = await getChannelInfo(m.channel_id);
+      diag.push(`  hit channel ${m.channel_id} parent=${(_t = info == null ? void 0 : info.parent_id) != null ? _t : "?"} type=${(_u = info == null ? void 0 : info.type) != null ? _u : "?"} name=${(_v = info == null ? void 0 : info.name) != null ? _v : "?"}`);
+      if (m.channel_id !== parentId && (info == null ? void 0 : info.parent_id) === parentId && THREAD_TYPES.includes(info.type) && nameMatches(info)) {
+        return m.channel_id;
+      }
+      if (m.channel_id === parentId) {
+        const startInfo = await getChannelInfo(m.id);
+        if (startInfo && startInfo.parent_id === parentId && THREAD_TYPES.includes(startInfo.type) && nameMatches(startInfo)) return m.id;
       }
     }
   }
-
-  // 5. last resort: messages that mention the user (a thread only counts if its name matches)
-  if (!found.size) {
-    for (const withChannel of [true, false]) {
-      const query = { mentions: user.id, include_nsfw: true };
-      if (withChannel) query.channel_id = parentId;
-      let res = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        res = await safeGet(`/guilds/${guildId}/messages/search`, query);
-        if (res && res.status === 202) {
-          await new Promise((r) => setTimeout(r, ((res.body && res.body.retry_after) != null ? res.body.retry_after : 1) * 1e3));
-          continue;
-        }
-        break;
-      }
-      const hits = ((res && res.body && res.body.messages) != null ? res.body.messages : []).flat();
-      diag.push(`message search${withChannel ? " in channel" : ""}: status ${st(res)}, ${hits.length} hits`);
-      for (const m of hits) {
-        if (m.thread && m.thread.id && nameMatches(m.thread)) add(m.thread);
-      }
-      for (const m of hits.slice(0, 10)) {
-        const info = await getChannelInfo(m.channel_id);
-        diag.push(`  hit channel ${m.channel_id} parent=${info && info.parent_id != null ? info.parent_id : "?"} type=${info && info.type != null ? info.type : "?"} name=${info && info.name != null ? info.name : "?"}`);
-        if (m.channel_id !== parentId && info && info.parent_id === parentId && THREAD_TYPES.includes(info.type) && nameMatches(info)) {
-          add(info);
-        }
-        if (m.channel_id === parentId) {
-          const startInfo = await getChannelInfo(m.id);
-          if (startInfo && startInfo.parent_id === parentId && THREAD_TYPES.includes(startInfo.type) && nameMatches(startInfo)) add(startInfo);
-        }
-      }
-      if (found.size) break;
-    }
-  }
-
-  const list = Array.from(found.values()).sort((a, b) => b.ts - a.ts);
-  diag.push(`threads found: ${list.length}`);
-  return list;
+  return null;
 }
-
-async function loadPreviews(t) {
-  const res = await safeGet(`/channels/${t.id}/messages`, { limit: PREVIEW_COUNT });
-  if (!res || res.error || !Array.isArray(res.body)) throw new Error("status " + st(res));
-  return res.body.map((m) => {
-    const author = m.author ? m.author.global_name || m.author.username || "?" : "?";
-    let text = String(m.content || "").replace(/\s+/g, " ").trim();
-    if (!text) {
-      text = m.attachments && m.attachments.length ? "[attachment]" : m.embeds && m.embeds.length ? "[embed]" : m.sticker_items && m.sticker_items.length ? "[sticker]" : "[no text]";
-    }
-    if (text.length > 80) text = text.slice(0, 80) + "…";
-    return { ts: Date.parse(m.timestamp), author, text };
-  });
-}
-
-function openThread(guildId, threadId, name) {
-  _vendetta.logger.log(`[ViewThread] opening ${threadId} (${name != null ? name : "?"})`);
-  toasts.showToast(`Thread: ${name ? name : threadId}`, assets.getAssetIDByName("Small"));
-  if (!openChannel(guildId, threadId)) {
-    const link = `https://discord.com/channels/${guildId}/${threadId}`;
-    copyToClipboard(link);
-    toasts.showToast("Couldn't open it in-app, thread link copied to clipboard", assets.getAssetIDByName("Small"));
-  }
-}
-
-function threadSummary(t) {
-  const lines = [`${t.archived ? "Archived" : "Active"} · last activity ${fmtDate(t.ts)}`];
-  if (t.previews && t.previews.length) {
-    for (const p of t.previews) lines.push(`${fmtDate(p.ts)} · ${p.author}: ${p.text}`);
-  } else {
-    lines.push(t.previewError ? "(couldn't load messages)" : "(no messages)");
-  }
-  return lines.join("\n");
-}
-
-// list mode: bottom sheet with every thread found, newest first
-function ThreadList(props) {
-  const h = common.React.createElement;
-  const RN = common.ReactNative;
-  const Wrap = ActionSheetModule && ActionSheetModule.ActionSheet ? ActionSheetModule.ActionSheet : RN.View;
-  const rows = props.items.map((t) => h(FormRow, {
-    key: t.id,
-    label: t.name || t.id,
-    subLabel: threadSummary(t),
-    trailing: FormRow.Arrow ? h(FormRow.Arrow) : void 0,
-    onPress: () => {
-      ActionSheet.hideActionSheet();
-      openThread(props.guildId, t.id, t.name);
-    }
-  }));
-  return h(
-    Wrap,
-    null,
-    h(
-      RN.ScrollView,
-      { style: { maxHeight: Math.round(RN.Dimensions.get("window").height * 0.75) } },
-      h(FormSection, { title: `Threads for ${props.user.username} (${props.items.length})`, android_noDivider: true }, ...rows)
-    )
-  );
-}
-
-async function showList(guildId, user, threads) {
-  const top = threads.slice(0, MAX_LIST);
-  await Promise.all(top.map(async (t) => {
-    try {
-      t.previews = await loadPreviews(t);
-    } catch (e) {
-      t.previews = [];
-      t.previewError = true;
-    }
-  }));
-  const Comp = () => common.React.createElement(ThreadList, { guildId, user, items: top });
-  try {
-    ActionSheet.openLazy(Promise.resolve({ default: Comp }), "ViewThreadList", {});
-  } catch (e) {
-    const text = top.map((t) => `${t.name} (${t.id})\n${threadSummary(t)}`).join("\n\n");
-    _vendetta.logger.log("[ViewThread] list sheet failed: " + String(e) + "\n" + text);
-    copyToClipboard(text);
-    toasts.showToast("Couldn't show the list, thread list copied to clipboard", assets.getAssetIDByName("Small"));
-  }
-}
-
 async function viewThread(guildId, user) {
   const parentId = plugin.storage.threadChannelId;
   if (!parentId) {
@@ -397,8 +233,8 @@ async function viewThread(guildId, user) {
   }
   const diag = [];
   try {
-    const threads = await findThreads(guildId, parentId, user, diag);
-    if (!threads.length) {
+    const threadId = await findThread(guildId, parentId, user, diag);
+    if (!threadId) {
       const report = `[ViewThread] No thread for ${user.username} (${user.id})
 guild ${guildId}, thread channel ${parentId}
 ` + diag.join("\n");
@@ -407,12 +243,14 @@ guild ${guildId}, thread channel ${parentId}
       toasts.showToast(`No thread for ${user.username} (debug info copied to clipboard)`, assets.getAssetIDByName("Small"));
       return;
     }
-    if (plugin.storage.listMode) {
-      await showList(guildId, user, threads);
-      return;
+    const foundInfo = await getChannelInfo(threadId);
+    _vendetta.logger.log(`[ViewThread] ${user.username} (${user.id}) -> ${threadId} (${foundInfo ? foundInfo.name : "?"})`);
+    toasts.showToast(`Thread: ${foundInfo && foundInfo.name ? foundInfo.name : threadId}`, assets.getAssetIDByName("Small"));
+    if (!openChannel(guildId, threadId)) {
+      const link = `https://discord.com/channels/${guildId}/${threadId}`;
+      copyToClipboard(link);
+      toasts.showToast("Couldn't open it in-app, thread link copied to clipboard", assets.getAssetIDByName("Small"));
     }
-    // auto mode: newest thread by last activity
-    openThread(guildId, threads[0].id, threads[0].name);
   } catch (err) {
     const report = `[ViewThread] Error: ${String(err)}
 ${diag.join("\n")}`;
@@ -421,13 +259,11 @@ ${diag.join("\n")}`;
     toasts.showToast("View Thread failed (details copied to clipboard)", assets.getAssetIDByName("Small"));
   }
 }
-
 let unpatchOpenLazy = null;
 const index = {
   onLoad() {
     var _a2, _b2;
     (_b2 = (_a2 = plugin.storage).threadChannelId) != null ? _b2 : _a2.threadChannelId = "";
-    if (plugin.storage.listMode === void 0) plugin.storage.listMode = false;
     unpatchOpenLazy = patcher.before("openLazy", ActionSheet, ([comp, args, msg]) => {
       var _a3;
       if (args !== "MessageLongPressActionSheet" || !(msg == null ? void 0 : msg.message)) return;
@@ -488,17 +324,6 @@ const index = {
   settings: Settings
 };
 
-
-{
-  const __onLoad = index.onLoad;
-  index.onLoad = function () {
-    try { return __onLoad.apply(this, arguments); } catch (e) { __report("onLoad failed", e); }
-  };
-}
 exports.default = index;
-} catch (e) {
-  __report("failed while loading", e);
-  exports.default = { onLoad() {}, onUnload() {} };
-}
 return module.exports;
 })();
