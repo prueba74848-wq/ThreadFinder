@@ -22,6 +22,11 @@ var exports = module.exports;
 
 Object.defineProperties(exports, { __esModule: { value: true }, [Symbol.toStringTag]: { value: 'Module' } });
 
+function __report(where, e) {
+  try { vendetta.logger.log("[ViewThread] " + where + ": " + String(e && e.stack ? e.stack : e)); } catch (_) {}
+  try { alert("[ViewThread] " + where + "\n" + String(e && e.stack ? e.stack : e)); } catch (_) {}
+}
+try {
 const metro = require('@vendetta/metro');
 const patcher = require('@vendetta/patcher');
 const plugin = require('@vendetta/plugin');
@@ -483,6 +488,17 @@ const index = {
   settings: Settings
 };
 
+
+{
+  const __onLoad = index.onLoad;
+  index.onLoad = function () {
+    try { return __onLoad.apply(this, arguments); } catch (e) { __report("onLoad failed", e); }
+  };
+}
 exports.default = index;
+} catch (e) {
+  __report("failed while loading", e);
+  exports.default = { onLoad() {}, onUnload() {} };
+}
 return module.exports;
 })();
