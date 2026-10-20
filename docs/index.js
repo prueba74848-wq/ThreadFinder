@@ -39,12 +39,12 @@ function Settings() {
   return /* @__PURE__ */ common.React.createElement(FormSection, { title: "View Thread", android_noDivider: true }, /* @__PURE__ */ common.React.createElement(
     FormInput,
     {
-      title: "Thread channel ID",
-      placeholder: "ID of the channel where the bot creates threads",
+      title: "Thread channel ID(s)",
+      placeholder: "One ID per server, separated by commas",
       value: plugin.storage.threadChannelId,
-      onChange: (v) => plugin.storage.threadChannelId = v.trim()
+      onChange: (v) => plugin.storage.threadChannelId = v
     }
-  ), /* @__PURE__ */ common.React.createElement(FormText, { style: { paddingHorizontal: 16, paddingBottom: 8 } }, 'Long-press a message and tap "View thread". Enable Developer Mode, then long-press the channel and use Copy Channel ID.'));
+  ), /* @__PURE__ */ common.React.createElement(FormText, { style: { paddingHorizontal: 16, paddingBottom: 8 } }, 'One thread channel per server: paste the IDs separated by commas (example: 123456789012345678, 234567890123456789). The plugin uses the one that belongs to the server you are in. If a channel cannot be matched to its server automatically, write it as serverId:channelId. Long-press a message and tap "View thread". Enable Developer Mode, then long-press a channel and use Copy Channel ID.'));
 }
 
 var _a, _b, _c;
@@ -225,14 +225,70 @@ async function findThread(guildId, parentId, user, diag) {
   }
   return null;
 }
+// ---- multi-server support: the setting can hold one thread channel per server ----
+const channelGuildCache = new Map();
+async function getChannelGuild(channelId) {
+  if (channelGuildCache.has(channelId)) return channelGuildCache.get(channelId);
+  let guild;
+  try {
+    const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
+    const local = ChannelStore && ChannelStore.getChannel ? ChannelStore.getChannel(channelId) : null;
+    if (local && local.guild_id) guild = local.guild_id;
+  } catch {
+  }
+  if (!guild) {
+    const res = await safeGet(`/channels/${channelId}`);
+    if (res && res.body && res.body.guild_id) guild = res.body.guild_id;
+  }
+  if (guild) channelGuildCache.set(channelId, guild);
+  return guild;
+}
+// accepts "channelId" or "serverId:channelId", separated by commas, spaces or new lines
+function parseChannelEntries(raw) {
+  const out = [];
+  for (const tok of String(raw != null ? raw : "").split(/[\s,;]+/)) {
+    if (!tok) continue;
+    const pair = /^(\d{15,25})[:=](\d{15,25})$/.exec(tok);
+    if (pair) out.push({ guildId: pair[1], channelId: pair[2] });
+    else if (/^\d{15,25}$/.test(tok)) out.push({ channelId: tok });
+  }
+  return out;
+}
+async function resolveParentId(guildId, raw, diag) {
+  const entries = parseChannelEntries(raw);
+  diag.push(`configured thread channels: ${entries.length}`);
+  for (const e of entries) {
+    if (e.guildId === guildId) return e.channelId;
+  }
+  const unresolved = [];
+  for (const e of entries) {
+    if (e.guildId) continue;
+    const g = await getChannelGuild(e.channelId);
+    diag.push(`  channel ${e.channelId} -> server ${g != null ? g : "?"}`);
+    if (g === guildId) return e.channelId;
+    if (!g) unresolved.push(e);
+  }
+  // a single channel whose server could not be determined: use it, like before
+  if (entries.length === 1 && unresolved.length === 1) return unresolved[0].channelId;
+  return null;
+}
 async function viewThread(guildId, user) {
-  const parentId = plugin.storage.threadChannelId;
-  if (!parentId) {
-    toasts.showToast("View Thread: set the thread channel ID in plugin settings", assets.getAssetIDByName("Small"));
+  const raw = plugin.storage.threadChannelId;
+  if (!raw || !String(raw).trim()) {
+    toasts.showToast("View Thread: set the thread channel ID(s) in plugin settings", assets.getAssetIDByName("Small"));
     return;
   }
   const diag = [];
   try {
+    const parentId = await resolveParentId(guildId, raw, diag);
+    if (!parentId) {
+      const report = `[ViewThread] No thread channel configured for server ${guildId}
+` + diag.join("\n");
+      _vendetta.logger.log(report);
+      copyToClipboard(report);
+      toasts.showToast("View Thread: no thread channel set for this server (debug info copied to clipboard)", assets.getAssetIDByName("Small"));
+      return;
+    }
     const threadId = await findThread(guildId, parentId, user, diag);
     if (!threadId) {
       const report = `[ViewThread] No thread for ${user.username} (${user.id})
