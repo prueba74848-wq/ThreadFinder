@@ -96,7 +96,11 @@ function getNeedles(guildId, user) {
     nick = (_a2 = MemberStore == null ? void 0 : MemberStore.getNick) == null ? void 0 : _a2.call(MemberStore, guildId, user.id);
   } catch {
   }
-  return [user.username, user.globalName, user.global_name, nick, user.id].filter(Boolean).map(norm);
+  // primary = identifies one account (username, id); secondary = display names, which are not unique
+  return {
+    primary: [user.username, user.id].filter(Boolean).map(norm),
+    secondary: [user.globalName, user.global_name, nick].filter(Boolean).map(norm)
+  };
 }
 async function safeGet(url, query) {
   var _a2, _b2, _c2, _d, _e, _f, _g;
@@ -126,30 +130,53 @@ async function isThreadOf(channelId, parentId) {
   return !!info && info.parent_id === parentId && THREAD_TYPES.includes(info.type);
 }
 async function findThread(guildId, parentId, user, diag) {
-  var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
   try {
     const UserStore = metro.findByProps("getUser", "getCurrentUser");
-    const real = (_a2 = UserStore == null ? void 0 : UserStore.getUser) == null ? void 0 : _a2.call(UserStore, user.id);
-    if (real == null ? void 0 : real.username) user = { ...user, username: real.username, globalName: (_b2 = real.globalName) != null ? _b2 : user.globalName };
+    const real = UserStore && UserStore.getUser ? UserStore.getUser(user.id) : null;
+    if (real && real.username) user = { ...user, username: real.username, globalName: real.globalName != null ? real.globalName : user.globalName };
   } catch {
   }
-  diag.push(`@username=${user.username} display=${(_d = (_c2 = user.globalName) != null ? _c2 : user.global_name) != null ? _d : "?"}`);
+  diag.push(`@username=${user.username} display=${user.globalName != null ? user.globalName : (user.global_name != null ? user.global_name : "?")}`);
   const clean = (s) => norm(s).replace(/[^a-z0-9À-￿]/g, "");
-  const needles = getNeedles(guildId, user).map(clean).filter((n) => n.length >= 3);
-  const nameMatches = (t) => {
-    const name = clean(t == null ? void 0 : t.name);
-    return !!name && needles.some((n) => name === n || (n.length >= 5 && name.includes(n)));
+  const { primary: p0, secondary: s0 } = getNeedles(guildId, user);
+  const primary = [...new Set(p0.map(clean).filter((n) => n.length >= 2))];
+  const secondary = [...new Set(s0.map(clean).filter((n) => n.length >= 3))].filter((n) => !primary.includes(n));
+  // 4 = exact username/id, 3 = exact display name/nickname, 1 = partial match.
+  // Partial matches are only used when they are the ONLY candidate, never "first one wins".
+  const score = (t) => {
+    const name = clean(t && t.name);
+    if (!name) return 0;
+    if (primary.includes(name)) return 4;
+    if (secondary.includes(name)) return 3;
+    return [...primary, ...secondary].some((n) => n.length >= 5 && name.includes(n)) ? 1 : 0;
   };
+  const seen = new Map();
+  const consider = (list) => {
+    for (const t of list) {
+      if (!t || !t.id) continue;
+      const s = score(t);
+      if (s && (!seen.has(t.id) || seen.get(t.id).score < s)) seen.set(t.id, { score: s, name: t.name });
+    }
+  };
+  const pickExact = () => {
+    let best = null;
+    for (const [id, v] of seen) {
+      if (v.score >= 3 && (!best || v.score > best.score)) best = { id, score: v.score };
+    }
+    return best ? best.id : null;
+  };
+  const inParent = (t) => !t.parent_id || t.parent_id === parentId;
   const stripEdge = (s) => s.replace(/^[^\w]+|[^\w]+$/g, "");
   const searchNames = [...new Set(
-    [user.username, (_e = user.globalName) != null ? _e : user.global_name].filter(Boolean).map((s) => stripEdge(String(s))).filter((s) => s.length >= 2)
+    [user.username, user.globalName != null ? user.globalName : user.global_name].filter(Boolean).map((s) => stripEdge(String(s))).filter((s) => s.length >= 2)
   )];
+  let hit;
   try {
     const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-    const all = Object.values((_g = (_f = ChannelStore == null ? void 0 : ChannelStore.getMutableGuildChannelsForGuild) == null ? void 0 : _f.call(ChannelStore, guildId)) != null ? _g : {});
+    const all = Object.values((ChannelStore && ChannelStore.getMutableGuildChannelsForGuild ? ChannelStore.getMutableGuildChannelsForGuild(guildId) : null) || {});
     diag.push(`local channels: ${all.length}`);
-    const t = all.find((c) => (c == null ? void 0 : c.parent_id) === parentId && nameMatches(c));
-    if (t) return t.id;
+    consider(all.filter((c) => c && c.parent_id === parentId));
+    if (hit = pickExact()) return hit;
   } catch (e) {
     _vendetta.logger.log("[ViewThread] local lookup failed: " + String(e));
   }
@@ -162,10 +189,10 @@ async function findThread(guildId, parentId, user, diag) {
         sort_order: "desc",
         archived
       });
-      const threads = (_i = (_h = res == null ? void 0 : res.body) == null ? void 0 : _h.threads) != null ? _i : [];
+      const threads = ((res && res.body && res.body.threads) || []).filter(inParent);
       diag.push(`thread search "${q}" archived=${archived}: status ${st(res)}, ${threads.length} results`);
-      const t = threads.find(nameMatches);
-      if (t) return t.id;
+      consider(threads);
+      if (hit = pickExact()) return hit;
     }
   }
   for (const kind of ["public", "private"]) {
@@ -174,54 +201,63 @@ async function findThread(guildId, parentId, user, diag) {
       const query = { limit: 100 };
       if (beforeTs) query.before = beforeTs;
       const res = await safeGet(`/channels/${parentId}/threads/archived/${kind}`, query);
-      const threads = (_k = (_j = res == null ? void 0 : res.body) == null ? void 0 : _j.threads) != null ? _k : [];
+      const threads = ((res && res.body && res.body.threads) || []).filter(inParent);
       if (page === 0) {
         diag.push(`archived ${kind}: status ${st(res)}, ${threads.length} on page 1`);
         if (threads.length) diag.push(`  sample names: ${threads.slice(0, 5).map((t2) => t2.name).join(" | ")}`);
       }
-      const t = threads.find(nameMatches);
-      if (t) return t.id;
-      if (!((_l = res == null ? void 0 : res.body) == null ? void 0 : _l.has_more) || !threads.length) break;
-      beforeTs = (_n = (_m = threads[threads.length - 1]) == null ? void 0 : _m.thread_metadata) == null ? void 0 : _n.archive_timestamp;
+      consider(threads);
+      if (hit = pickExact()) return hit;
+      if (!(res && res.body && res.body.has_more) || !threads.length) break;
+      const last = threads[threads.length - 1];
+      beforeTs = last && last.thread_metadata ? last.thread_metadata.archive_timestamp : undefined;
       if (!beforeTs) break;
     }
   }
   const active = await safeGet(`/guilds/${guildId}/threads/active`);
-  const activeThreads = (_p = (_o = active == null ? void 0 : active.body) == null ? void 0 : _o.threads) != null ? _p : [];
+  const activeThreads = (active && active.body && active.body.threads) || [];
   diag.push(`active threads: status ${st(active)}, ${activeThreads.length} results`);
-  const a = activeThreads.find((t) => t.parent_id === parentId && nameMatches(t));
-  if (a) return a.id;
+  consider(activeThreads.filter((t) => t.parent_id === parentId));
+  if (hit = pickExact()) return hit;
   for (const withChannel of [true, false]) {
     const query = { mentions: user.id, include_nsfw: true };
     if (withChannel) query.channel_id = parentId;
     let res = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       res = await safeGet(`/guilds/${guildId}/messages/search`, query);
-      if ((res == null ? void 0 : res.status) === 202) {
-        await new Promise((r) => {
-          var _a3, _b3;
-          return setTimeout(r, ((_b3 = (_a3 = res.body) == null ? void 0 : _a3.retry_after) != null ? _b3 : 1) * 1e3);
-        });
+      if (res && res.status === 202) {
+        await new Promise((r) => setTimeout(r, ((res.body && res.body.retry_after) || 1) * 1e3));
         continue;
       }
       break;
     }
-    const hits = ((_r = (_q = res == null ? void 0 : res.body) == null ? void 0 : _q.messages) != null ? _r : []).flat();
+    const hits = ((res && res.body && res.body.messages) || []).flat();
     diag.push(`message search${withChannel ? " in channel" : ""}: status ${st(res)}, ${hits.length} hits`);
-    for (const m of hits) {
-      if (((_s = m.thread) == null ? void 0 : _s.id) && nameMatches(m.thread)) return m.thread.id;
-    }
+    consider(hits.map((m) => m.thread).filter((t) => t && inParent(t)));
+    if (hit = pickExact()) return hit;
     for (const m of hits.slice(0, 10)) {
       const info = await getChannelInfo(m.channel_id);
-      diag.push(`  hit channel ${m.channel_id} parent=${(_t = info == null ? void 0 : info.parent_id) != null ? _t : "?"} type=${(_u = info == null ? void 0 : info.type) != null ? _u : "?"} name=${(_v = info == null ? void 0 : info.name) != null ? _v : "?"}`);
-      if (m.channel_id !== parentId && (info == null ? void 0 : info.parent_id) === parentId && THREAD_TYPES.includes(info.type) && nameMatches(info)) {
-        return m.channel_id;
+      diag.push(`  hit channel ${m.channel_id} parent=${info && info.parent_id != null ? info.parent_id : "?"} type=${info && info.type != null ? info.type : "?"} name=${info && info.name != null ? info.name : "?"}`);
+      if (m.channel_id !== parentId && info && info.parent_id === parentId && THREAD_TYPES.includes(info.type)) {
+        consider([{ id: m.channel_id, name: info.name }]);
       }
       if (m.channel_id === parentId) {
         const startInfo = await getChannelInfo(m.id);
-        if (startInfo && startInfo.parent_id === parentId && THREAD_TYPES.includes(startInfo.type) && nameMatches(startInfo)) return m.id;
+        if (startInfo && startInfo.parent_id === parentId && THREAD_TYPES.includes(startInfo.type)) {
+          consider([{ id: m.id, name: startInfo.name }]);
+        }
       }
     }
+    if (hit = pickExact()) return hit;
+  }
+  // nothing exact: a partial match is accepted only if it is the single candidate
+  const partial = [...seen].filter(([, v]) => v.score < 3);
+  if (partial.length === 1) {
+    diag.push(`only partial match used: ${partial[0][1].name} (${partial[0][0]})`);
+    return partial[0][0];
+  }
+  if (partial.length > 1) {
+    diag.push(`ambiguous partial matches, not opening any: ${partial.map(([id, v]) => `${v.name} (${id})`).join(" | ")}`);
   }
   return null;
 }
